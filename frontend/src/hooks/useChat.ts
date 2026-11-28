@@ -1,6 +1,31 @@
 import { useCallback, useRef } from "react";
 import { api } from "@/lib/api";
-import { useChatStore, type QueryResponseData } from "@/stores/chat";
+import { useChatStore, type Message, type QueryResponseData } from "@/stores/chat";
+
+export function toAssistantMessage(
+  data: QueryResponseData,
+  id: string,
+  timestamp: number
+): Message {
+  let content: string;
+  if (data.error) {
+    content = data.error;
+  } else if (data.intent === "data_query") {
+    content = `Found ${data.rows?.length ?? 0} rows.`;
+  } else if (data.intent === "fixed_workflow") {
+    content = "Workflow executed.";
+  } else {
+    content = data.insight ?? "Done.";
+  }
+  return {
+    id,
+    role: "assistant",
+    content,
+    queryResponse: data,
+    timestamp,
+    retrievedAt: Date.now(),
+  };
+}
 
 export function useChat() {
   const {
@@ -51,26 +76,8 @@ export function useChat() {
           { question }
         );
 
-        // Build assistant message
-        let content = "";
-        if (data.error) {
-          content = data.error;
-        } else if (data.intent === "data_query") {
-          const rowCount = data.rows?.length ?? 0;
-          content = `Found ${rowCount} rows.`;
-        } else if (data.intent === "fixed_workflow") {
-          content = "Workflow executed.";
-        } else {
-          content = data.insight ?? "Done.";
-        }
-
-        const assistantMsg = {
-          id: `assistant-${Date.now()}`,
-          role: "assistant" as const,
-          content,
-          queryResponse: data,
-          timestamp: Date.now(),
-        };
+        const now = Date.now();
+        const assistantMsg = toAssistantMessage(data, `assistant-${now}`, now);
         addMessage(assistantMsg);
       } catch (err: unknown) {
         const errorMsg =

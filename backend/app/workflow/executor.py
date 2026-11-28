@@ -7,6 +7,7 @@ from app.core.encryption import decrypt
 from app.query_engine.executor import execute_query
 from app.query_engine.rls import inject_rls
 from app.query_engine.sql_validator import validate_sql
+from app.viz.report import build_report_chart
 
 
 @dataclass
@@ -62,6 +63,9 @@ async def run_workflow(
                 "rows": exec_result["rows"],
                 "execution_ms": exec_result["execution_ms"],
                 "error": None,
+                "chart_config": build_report_chart(
+                    step.get("chart"), exec_result["columns"], exec_result["rows"]
+                ),
             })
             total_ms += exec_result["execution_ms"]
         except Exception as exc:

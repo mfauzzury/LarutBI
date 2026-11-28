@@ -11,10 +11,11 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth";
-import { useChatStore } from "@/stores/chat";
+import { useChatStore, type QueryResponseData } from "@/stores/chat";
+import { toAssistantMessage } from "@/hooks/useChat";
 import { api } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -23,6 +24,12 @@ interface ConversationItem {
   title: string;
   datasource_id: number;
   updated_at: string;
+}
+
+interface HistoryEntry {
+  question: string;
+  created_at: string;
+  response: QueryResponseData;
 }
 
 const adminMenuItems = [
@@ -37,11 +44,18 @@ const adminMenuItems = [
 
 export default function Sidebar() {
   const location = useLocation();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === "admin" || user?.role === "superadmin";
-  const { conversationId, setConversationId, setDatasourceId, reset } =
-    useChatStore();
+  const {
+    conversationId,
+    setConversationId,
+    setDatasourceId,
+    setMessages,
+    setIsQuerying,
+    reset,
+  } = useChatStore();
 
   const { data: conversations } = useQuery<ConversationItem[]>({
     queryKey: ["conversations"],
@@ -56,10 +70,44 @@ export default function Sidebar() {
     reset();
   };
 
-  const handleSelectConversation = (conv: ConversationItem) => {
+  const handleSelectConversation = async (conv: ConversationItem) => {
     reset();
     setConversationId(conv.id);
     setDatasourceId(conv.datasource_id);
+    navigate("/");
+
+    // Ignore the reply if another chat was opened while this one was loading
+    const isStillOpen = () =>
+      useChatStore.getState().conversationId === conv.id;
+    setIsQuerying(true);
+    try {
+      const { data } = await api.get<HistoryEntry[]>(
+        `/api/v1/conversations/${conv.id}/messages`
+      );
+      if (!isStillOpen()) return;
+      setMessages(
+        data.flatMap((entry) => {
+          const id = entry.response.query_log_id;
+          const timestamp = Date.parse(`${entry.created_at}Z`);
+          return [
+            { id: `user-${id}`, role: "user" as const, content: entry.question, timestamp },
+            toAssistantMessage(entry.response, `assistant-${id}`, timestamp),
+          ];
+        })
+      );
+    } catch {
+      if (!isStillOpen()) return;
+      setMessages([
+        {
+          id: `error-${conv.id}`,
+          role: "assistant",
+          content: "Could not load this chat.",
+          timestamp: Date.parse(`${conv.updated_at}Z`),
+        },
+      ]);
+    } finally {
+      if (isStillOpen()) setIsQuerying(false);
+    }
   };
 
   const handleDeleteConversation = async (
@@ -147,7 +195,10 @@ export default function Sidebar() {
       <div className="border-t p-3 space-y-1">
         <Link
           to="/settings"
-          className="flex items-center gap-2 px-3 py-2 rounded-md text-sm hover:bg-gray-100"
+          className={cn(
+            "flex items-center gap-2 px-3 py-2 rounded-md text-sm hover:bg-gray-100",
+            location.pathname === "/settings" && "bg-gray-100 font-medium"
+          )}
         >
           <Settings size={16} />
           Settings

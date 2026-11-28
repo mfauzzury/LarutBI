@@ -40,7 +40,7 @@ async def create_workflow(
         name=body.name,
         datasource_id=body.datasource_id,
         trigger_keywords=body.trigger_keywords,
-        steps=[s.model_dump() for s in body.steps],
+        steps=[s.model_dump(exclude_none=True) for s in body.steps],
         created_by=current_user.id,
     )
     db.add(wf)
@@ -66,7 +66,7 @@ async def update_workflow(
     if body.trigger_keywords is not None:
         wf.trigger_keywords = body.trigger_keywords
     if body.steps is not None:
-        wf.steps = [s.model_dump() for s in body.steps]
+        wf.steps = [s.model_dump(exclude_none=True) for s in body.steps]
     if body.is_active is not None:
         wf.is_active = body.is_active
 

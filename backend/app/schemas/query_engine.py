@@ -34,6 +34,7 @@ class WorkflowStepResult(BaseModel):
     rows: list[list]
     execution_ms: int
     error: str | None
+    chart_config: dict | None = None
 
 
 class WorkflowResultResponse(BaseModel):
@@ -57,3 +58,9 @@ class QueryResponse(BaseModel):
     error: str | None
     execution_ms: int | None
     workflow_result: WorkflowResultResponse | None = None
+
+
+class HistoryEntryResponse(BaseModel):
+    question: str
+    created_at: datetime
+    response: QueryResponse

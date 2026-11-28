@@ -7,6 +7,8 @@ export interface Message {
   /** Only on assistant messages */
   queryResponse?: QueryResponseData;
   timestamp: number;
+  /** When the results were fetched; differs from timestamp for reopened chats */
+  retrievedAt?: number;
 }
 
 export interface QueryResponseData {
@@ -30,6 +32,7 @@ export interface QueryResponseData {
       rows: unknown[][];
       execution_ms: number;
       error: string | null;
+      chart_config?: Record<string, unknown> | null;
     }[];
     total_execution_ms: number;
     error: string | null;

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from inspect import isawaitable
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,6 +69,9 @@ async def run_pipeline(
 ) -> PipelineResult:
     """Execute the full 9-step query pipeline.
 
+    A question containing an active workflow's trigger keyword runs that
+    workflow's saved SQL immediately, without calling any model.
+
     Steps:
     1. Intent recognition
     2. Schema retrieval (Qdrant + bge-reranker)
@@ -80,6 +83,11 @@ async def run_pipeline(
     8. Result processing (anomaly check + chart inference)
     9. Insight + decision suggestions (LLM)
     """
+    wf = await match_workflow(question, datasource_id, db)
+
+    if wf is not None:
+        return await _run_matched_workflow(wf, datasource_id, user, db)
+
     reload_result = llm_gateway.reload_from_db(db)
     if isawaitable(reload_result):
         await reload_result
@@ -90,41 +98,11 @@ async def run_pipeline(
     if intent not in _VALID_INTENTS:
         intent = "data_query"
 
-    wf = None
-    if intent in {"data_query", "fixed_workflow"}:
-        wf = await match_workflow(question, datasource_id, db)
-
-    if intent == "fixed_workflow" and wf is None:
+    if intent == "fixed_workflow":
         return PipelineResult(
             intent=intent, sql=None, columns=[], rows=[],
             chart_type=None, chart_config=None, insight=None, suggestions=[],
             error="No matching workflow found", execution_ms=None,
-        )
-
-    if wf is not None:
-        # Fetch datasource for workflow execution
-        ds_row = await db.execute(select(Datasource).where(Datasource.id == datasource_id))
-        ds = ds_row.scalar_one_or_none()
-        if ds is None:
-            return PipelineResult(
-                intent=intent, sql=None, columns=[], rows=[],
-                chart_type=None, chart_config=None, insight=None, suggestions=[],
-                error="Datasource not found", execution_ms=None,
-            )
-        allowed_tables = await _get_allowed_tables(datasource_id, db)
-        scopes = await _get_user_scopes(user.id, db)
-        wf_result = await run_workflow(
-            wf,
-            ds,
-            allowed_tables=allowed_tables,
-            scopes=scopes,
-            role=user.role.value,
-        )
-        return PipelineResult(
-            intent="fixed_workflow", sql=None, columns=[], rows=[],
-            chart_type=None, chart_config=None, insight=None, suggestions=[],
-            error=None, execution_ms=wf_result.total_execution_ms,
-            workflow_result=wf_result,
         )
 
     if intent != "data_query":
@@ -214,6 +192,66 @@ async def run_pipeline(
     )
 
 
+async def replay_query(
+    question: str,
+    intent: str,
+    sql: str | None,
+    error: str | None,
+    datasource_id: int,
+    user: User,
+    db: AsyncSession,
+) -> PipelineResult:
+    """Rebuild a past answer from its saved SQL or workflow, using current data.
+
+    No model is called, so insights and suggestions are not restored. The SQL is
+    validated again and the user's current data scopes are applied.
+    """
+    empty = PipelineResult(
+        intent=intent, sql=sql, columns=[], rows=[],
+        chart_type=None, chart_config=None, insight=None, suggestions=[],
+        error=error, execution_ms=None,
+    )
+    if error:
+        return empty
+
+    if intent == "fixed_workflow":
+        wf = await match_workflow(question, datasource_id, db)
+        if wf is None:
+            return replace(empty, error="This report is no longer available")
+        return await _run_matched_workflow(wf, datasource_id, user, db)
+
+    if intent != "data_query" or not sql:
+        return empty
+
+    ds_row = await db.execute(select(Datasource).where(Datasource.id == datasource_id))
+    ds = ds_row.scalar_one_or_none()
+    if ds is None:
+        return replace(empty, error="Datasource not found")
+
+    ok, err = validate_sql(sql, await _get_allowed_tables(datasource_id, db))
+    if not ok:
+        return replace(empty, error=f"SQL validation failed: {err}")
+
+    try:
+        scoped_sql = inject_rls(sql, await _get_user_scopes(user.id, db), user.role.value)
+        exec_result = await execute_query(
+            host=ds.host, port=ds.port, database=ds.database,
+            username=ds.readonly_user, password=decrypt(ds.readonly_encrypted_password),
+            sql=scoped_sql, db_type=ds.db_type.value, read_only=True,
+        )
+    except Exception as exc:
+        return replace(empty, error=str(exc))
+
+    columns, rows = exec_result["columns"], exec_result["rows"]
+    chart_type = infer_chart_type(columns, rows) if rows else None
+    return replace(
+        empty, columns=columns, rows=rows, chart_type=chart_type,
+        chart_config=build_chart_config(chart_type, columns, rows) if chart_type else None,
+        execution_ms=exec_result["execution_ms"],
+        warnings=check_result_anomalies(columns, rows),
+    )
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _extract_sql(text: str) -> str:
@@ -228,6 +266,32 @@ def _extract_sql(text: str) -> str:
             if cleaned.upper().lstrip().startswith("SELECT"):
                 return cleaned
     return text
+
+
+async def _run_matched_workflow(
+    wf, datasource_id: int, user: User, db: AsyncSession
+) -> PipelineResult:
+    ds_row = await db.execute(select(Datasource).where(Datasource.id == datasource_id))
+    ds = ds_row.scalar_one_or_none()
+    if ds is None:
+        return PipelineResult(
+            intent="fixed_workflow", sql=None, columns=[], rows=[],
+            chart_type=None, chart_config=None, insight=None, suggestions=[],
+            error="Datasource not found", execution_ms=None,
+        )
+    wf_result = await run_workflow(
+        wf,
+        ds,
+        allowed_tables=await _get_allowed_tables(datasource_id, db),
+        scopes=await _get_user_scopes(user.id, db),
+        role=user.role.value,
+    )
+    return PipelineResult(
+        intent="fixed_workflow", sql=None, columns=[], rows=[],
+        chart_type=None, chart_config=None, insight=None, suggestions=[],
+        error=None, execution_ms=wf_result.total_execution_ms,
+        workflow_result=wf_result,
+    )
 
 
 async def _get_user_scopes(user_id: int, db: AsyncSession) -> dict[str, str]:

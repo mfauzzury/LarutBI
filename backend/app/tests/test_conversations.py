@@ -224,3 +224,49 @@ class TestChatQuery:
         )
         updated_conv = result.scalar_one()
         assert updated_conv.title == question[:30]
+
+
+class TestConversationHistory:
+    @pytest.mark.asyncio
+    async def test_messages_rerun_saved_sql_without_a_model(
+        self, client: AsyncClient, db_session
+    ):
+        user, ds = await _setup(db_session)
+        conv = Conversation(user_id=user.id, datasource_id=ds.id, title="Past chat")
+        db_session.add(conv)
+        await db_session.commit()
+        db_session.add(QueryLog(
+            conversation_id=conv.id, user_id=user.id, datasource_id=ds.id,
+            user_question="total sales", intent="data_query",
+            generated_sql="SELECT SUM(sales) AS total FROM orders",
+        ))
+        await db_session.commit()
+
+        with patch("app.query_engine.pipeline.llm_gateway") as mock_gw, \
+             patch("app.query_engine.pipeline.execute_query", new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = {"columns": ["total"], "rows": [[500]], "execution_ms": 3}
+            resp = await client.get(
+                f"/api/v1/conversations/{conv.id}/messages", headers=auth_header(user.id)
+            )
+
+        assert resp.status_code == 200
+        entry = resp.json()[0]
+        assert entry["question"] == "total sales"
+        assert entry["response"]["rows"] == [[500]]
+        assert entry["response"]["error"] is None
+        assert mock_gw.mock_calls == []
+
+    @pytest.mark.asyncio
+    async def test_messages_hidden_from_other_users(self, client: AsyncClient, db_session):
+        user, ds = await _setup(db_session)
+        other = User(email="other@example.com", hashed_password=hash_password("p"), role=UserRole.viewer)
+        db_session.add(other)
+        await db_session.commit()
+        conv = Conversation(user_id=user.id, datasource_id=ds.id, title="Private")
+        db_session.add(conv)
+        await db_session.commit()
+
+        resp = await client.get(
+            f"/api/v1/conversations/{conv.id}/messages", headers=auth_header(other.id)
+        )
+        assert resp.status_code == 404

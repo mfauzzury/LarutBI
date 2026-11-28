@@ -216,6 +216,9 @@ class TestRunPipeline:
         assert result.workflow_result.workflow_name == "月度报表"
         assert len(result.workflow_result.step_results) == 1
         assert result.error is None
+        # A keyword match must not depend on any model being configured
+        mock_gw.intent.assert_not_called()
+        mock_gw.reload_from_db.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_fixed_workflow_intent_no_match_returns_error(self, db_session):

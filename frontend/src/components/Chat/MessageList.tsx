@@ -44,7 +44,10 @@ export default function MessageList({ messages, isQuerying }: MessageListProps) 
             {msg.role === "assistant" &&
               msg.queryResponse?.intent === "fixed_workflow" &&
               !msg.queryResponse.error && (
-                <WorkflowResultPanel queryResponse={msg.queryResponse} />
+                <WorkflowResultPanel
+                  queryResponse={msg.queryResponse}
+                  retrievedAt={msg.retrievedAt ?? msg.timestamp}
+                />
               )}
 
             {/* Insight card */}

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel
+
+
+class StepChart(BaseModel):
+    type: Literal["bar", "hbar", "stacked", "line"]
+    x: list[str] = []
+    y: list[str]
+    series: str | None = None
 
 
 class WorkflowStepDef(BaseModel):
     name: str
     sql: str
+    chart: StepChart | None = None
 
 
 class WorkflowCreate(BaseModel):

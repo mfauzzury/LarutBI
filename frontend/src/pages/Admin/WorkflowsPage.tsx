@@ -29,6 +29,42 @@ import {
 } from "@/components/ui/select";
 import { Plus, Trash2 } from "lucide-react";
 
+interface StepForm {
+  name: string;
+  sql: string;
+  chartType: string;
+  chartX: string;
+  chartY: string;
+  chartSeries: string;
+}
+
+const emptyStep: StepForm = {
+  name: "",
+  sql: "",
+  chartType: "",
+  chartX: "",
+  chartY: "",
+  chartSeries: "",
+};
+
+const columnList = (text: string) =>
+  text.split(",").map((c) => c.trim()).filter(Boolean);
+
+function toStep(step: StepForm) {
+  const { name, sql, chartType, chartX, chartY, chartSeries } = step;
+  if (!chartType) return { name, sql };
+  return {
+    name,
+    sql,
+    chart: {
+      type: chartType,
+      x: columnList(chartX),
+      y: columnList(chartY),
+      series: chartSeries.trim() || null,
+    },
+  };
+}
+
 interface WorkflowItem {
   id: number;
   name: string;
@@ -51,7 +87,7 @@ export default function WorkflowsPage() {
   const [form, setForm] = useState({
     name: "",
     keywords: "",
-    steps: [{ name: "", sql: "" }],
+    steps: [emptyStep],
   });
 
   const { data: datasources } = useQuery<Datasource[]>({
@@ -71,12 +107,12 @@ export default function WorkflowsPage() {
       name: string;
       datasource_id: number;
       trigger_keywords: string[];
-      steps: { name: string; sql: string }[];
+      steps: ReturnType<typeof toStep>[];
     }) => api.post("/api/v1/workflows", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workflows", dsId] });
       setOpen(false);
-      setForm({ name: "", keywords: "", steps: [{ name: "", sql: "" }] });
+      setForm({ name: "", keywords: "", steps: [emptyStep] });
     },
   });
 
@@ -92,9 +128,9 @@ export default function WorkflowsPage() {
   });
 
   const addStep = () =>
-    setForm({ ...form, steps: [...form.steps, { name: "", sql: "" }] });
+    setForm({ ...form, steps: [...form.steps, emptyStep] });
 
-  const updateStep = (idx: number, field: "name" | "sql", val: string) => {
+  const updateStep = (idx: number, field: keyof StepForm, val: string) => {
     const steps = [...form.steps];
     steps[idx] = { ...steps[idx], [field]: val };
     setForm({ ...form, steps });
@@ -102,7 +138,7 @@ export default function WorkflowsPage() {
 
   const removeStep = (idx: number) => {
     const steps = form.steps.filter((_, i) => i !== idx);
-    setForm({ ...form, steps: steps.length ? steps : [{ name: "", sql: "" }] });
+    setForm({ ...form, steps: steps.length ? steps : [emptyStep] });
   };
 
   return (
@@ -143,7 +179,7 @@ export default function WorkflowsPage() {
                         .split(",")
                         .map((k) => k.trim())
                         .filter(Boolean),
-                      steps: form.steps.filter((s) => s.name && s.sql),
+                      steps: form.steps.filter((s) => s.name && s.sql).map(toStep),
                     });
                   }}
                   className="space-y-3"
@@ -173,7 +209,8 @@ export default function WorkflowsPage() {
                       </Button>
                     </div>
                     {form.steps.map((step, i) => (
-                      <div key={i} className="flex gap-2 items-start">
+                      <div key={i} className="space-y-1">
+                      <div className="flex gap-2 items-start">
                         <Input
                           className="w-32"
                           placeholder="Step name"
@@ -196,6 +233,44 @@ export default function WorkflowsPage() {
                             <Trash2 size={14} className="text-red-500" />
                           </Button>
                         )}
+                      </div>
+                      <div className="flex gap-2">
+                        <select
+                          aria-label="Chart type"
+                          className="w-32 rounded-md border border-gray-200 px-2 py-1 text-sm"
+                          value={step.chartType}
+                          onChange={(e) => updateStep(i, "chartType", e.target.value)}
+                        >
+                          <option value="">No chart</option>
+                          <option value="bar">Bar</option>
+                          <option value="hbar">Horizontal bar</option>
+                          <option value="stacked">Stacked bar</option>
+                          <option value="line">Line</option>
+                        </select>
+                        {step.chartType && (
+                          <>
+                            <Input
+                              placeholder="Label columns"
+                              value={step.chartX}
+                              onChange={(e) => updateStep(i, "chartX", e.target.value)}
+                            />
+                            <Input
+                              placeholder="Value columns"
+                              value={step.chartY}
+                              onChange={(e) => updateStep(i, "chartY", e.target.value)}
+                              required
+                            />
+                          </>
+                        )}
+                        {step.chartType === "stacked" && (
+                          <Input
+                            placeholder="Split by column"
+                            value={step.chartSeries}
+                            onChange={(e) => updateStep(i, "chartSeries", e.target.value)}
+                            required
+                          />
+                        )}
+                      </div>
                       </div>
                     ))}
                   </div>

@@ -16,13 +16,35 @@ from app.schemas.query_engine import (
     ConversationResponse,
     QueryRequest,
     QueryResponse,
+    HistoryEntryResponse,
 )
 from app.api.deps import get_current_user
-from app.query_engine.pipeline import run_pipeline
+from app.query_engine.pipeline import PipelineResult, replay_query, run_pipeline
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 _AUTO_TITLE_LENGTH = 30
+_HISTORY_LIMIT = 20
+
+
+def _to_response(query_log_id: int, result: PipelineResult) -> QueryResponse:
+    return QueryResponse(
+        query_log_id=query_log_id,
+        intent=result.intent,
+        sql=result.sql,
+        columns=result.columns,
+        rows=result.rows,
+        chart_type=result.chart_type,
+        chart_config=result.chart_config,
+        insight=result.insight,
+        suggestions=result.suggestions,
+        warnings=result.warnings,
+        error=result.error,
+        execution_ms=result.execution_ms,
+        workflow_result=(
+            asdict(result.workflow_result) if result.workflow_result is not None else None
+        ),
+    )
 
 
 @router.get("", response_model=list[ConversationResponse])
@@ -97,6 +119,49 @@ async def delete_conversation(
     await db.commit()
 
 
+@router.get("/{conv_id}/messages", response_model=list[HistoryEntryResponse])
+async def list_messages(
+    conv_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the latest questions in a conversation, with results from current data."""
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conv_id,
+            Conversation.user_id == current_user.id,
+        )
+    )
+    conv = result.scalar_one_or_none()
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    logs = (await db.execute(
+        select(QueryLog)
+        .where(QueryLog.conversation_id == conv.id)
+        .order_by(QueryLog.id.desc())
+        .limit(_HISTORY_LIMIT)
+    )).scalars().all()
+
+    entries = []
+    for log in reversed(logs):
+        replayed = await replay_query(
+            question=log.user_question,
+            intent=log.intent or "data_query",
+            sql=log.generated_sql,
+            error=log.error_msg,
+            datasource_id=conv.datasource_id,
+            user=current_user,
+            db=db,
+        )
+        entries.append(HistoryEntryResponse(
+            question=log.user_question,
+            created_at=log.created_at,
+            response=_to_response(log.id, replayed),
+        ))
+    return entries
+
+
 @router.post("/{conv_id}/query", response_model=QueryResponse)
 async def query_conversation(
     conv_id: int,
@@ -142,24 +207,4 @@ async def query_conversation(
     await db.commit()
     await db.refresh(log)
 
-    workflow_result = (
-        asdict(pipeline_result.workflow_result)
-        if pipeline_result.workflow_result is not None
-        else None
-    )
-
-    return QueryResponse(
-        query_log_id=log.id,
-        intent=pipeline_result.intent,
-        sql=pipeline_result.sql,
-        columns=pipeline_result.columns,
-        rows=pipeline_result.rows,
-        chart_type=pipeline_result.chart_type,
-        chart_config=pipeline_result.chart_config,
-        insight=pipeline_result.insight,
-        suggestions=pipeline_result.suggestions,
-        warnings=pipeline_result.warnings,
-        error=pipeline_result.error,
-        execution_ms=pipeline_result.execution_ms,
-        workflow_result=workflow_result,
-    )
+    return _to_response(log.id, pipeline_result)

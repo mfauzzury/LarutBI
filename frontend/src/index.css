@@ -57,3 +57,33 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Print-only copy of a report (see PrintableReport.tsx) */
+.print-root {
+  position: absolute;
+  top: 0;
+  left: -10000px;
+  width: 1040px; /* printable width of A4 landscape */
+  background: #fff;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+  body.printing-report > :not(.print-root) {
+    display: none !important;
+  }
+  .print-root {
+    position: static;
+    width: auto;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .print-root section,
+  .print-root .print-keep,
+  .print-root tr {
+    break-inside: avoid;
+  }
+}
