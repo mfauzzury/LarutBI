@@ -11,6 +11,7 @@ import WorkflowsPage from "@/pages/Admin/WorkflowsPage";
 import UsersPage from "@/pages/Admin/UsersPage";
 import AuditPage from "@/pages/Admin/AuditPage";
 import ModelSettingsPage from "@/pages/Admin/ModelSettingsPage";
+import SettingsPage from "@/pages/Settings";
 
 const queryClient = new QueryClient();
 
@@ -44,6 +45,7 @@ export default function App() {
             }
           >
             <Route index element={<ChatPage />} />
+            <Route path="settings" element={<SettingsPage />} />
             <Route
               path="admin/datasources"
               element={<AdminRoute><DatasourcesPage /></AdminRoute>}
@@ -73,6 +75,7 @@ export default function App() {
               element={<AdminRoute><ModelSettingsPage /></AdminRoute>}
             />
           </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>
